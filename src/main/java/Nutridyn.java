@@ -20,87 +20,94 @@ import java.net.URLEncoder;
 
 public class Nutridyn {
 
-    // ── Config ──────────────────────────────────────────────────────────────
-    // ImgBB key: set IMGBB_API_KEY env var in GitHub Secrets, falls back to hardcoded for local runs
+    // ── Config ───────────────────────────────────────────────────────────────
     static final String IMGBB_API_KEY = System.getenv("IMGBB_API_KEY") != null
                                       ? System.getenv("IMGBB_API_KEY")
                                       : "46866c7eef7ee62b26a79f32a5d57a08";
-    static final String RUN_DATE      = new SimpleDateFormat("yyyy-MM-dd").format(new Date());
-    static final String RUN_TIME      = new SimpleDateFormat("HH-mm-ss").format(new Date());
-    static final String START_TIME    = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date());
+    static final String RUN_DATE   = new SimpleDateFormat("yyyy-MM-dd").format(new Date());
+    static final String RUN_TIME   = new SimpleDateFormat("HH-mm-ss").format(new Date());
+    static final String START_TIME = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date());
 
-    // ── Dynamic base path: works on any machine, any OS ─────────────────────
-    // Points to:  <your home folder>/NutridynAutomation/
-    // Windows  →  C:\Users\YourName\NutridynAutomation\
-    // Mac/Linux→  /Users/YourName/NutridynAutomation/
-    static final String BASE_DIR = System.getProperty("user.home")
-                                 + File.separator + "NutridynAutomation";
-
-    static final String SS_DIR   = BASE_DIR + File.separator + "screenshots"
-                                 + File.separator + RUN_DATE + File.separator + RUN_TIME;
-
-    static final String HTML_DIR = BASE_DIR + File.separator + "html"
-                                 + File.separator + RUN_DATE + File.separator + RUN_TIME;
-
-    static final String CSV_PATH = BASE_DIR + File.separator + "reports"
-                                 + File.separator + "Nutridyn.csv";
+    static final String BASE_DIR = System.getProperty("user.home") + File.separator + "NutridynAutomation";
+    static final String SS_DIR   = BASE_DIR + File.separator + "screenshots" + File.separator + RUN_DATE + File.separator + RUN_TIME;
+    static final String HTML_DIR = BASE_DIR + File.separator + "html"        + File.separator + RUN_DATE + File.separator + RUN_TIME;
+    static final String CSV_PATH = BASE_DIR + File.separator + "reports"     + File.separator + "Nutridyn.csv";
 
     static int totalSteps  = 0;
     static int passedSteps = 0;
     static int failedSteps = 0;
     static final List<String> htmlSteps = new ArrayList<>();
 
-    // ── Shared driver-level helpers ──────────────────────────────────────────
-    static WebDriver        driver;
-    static Actions          actions;
-    static WebDriverWait    wait;
+    static WebDriver       driver;
+    static Actions         actions;
+    static WebDriverWait   wait;
+    static WebDriverWait   shortWait;   // 5 s — used for optional/overlay elements
     static JavascriptExecutor js;
 
     public static void main(String[] args) throws Exception {
 
-        // ── Headless mode: auto-enabled on CI (no screen), off locally ──────
-        ChromeOptions options = new ChromeOptions();
         boolean isHeadless = "true".equalsIgnoreCase(System.getenv("HEADLESS"));
-        if (isHeadless) {
-            options.addArguments("--headless=new");      // Chrome 112+ headless flag
-            options.addArguments("--no-sandbox");        // required on Linux CI
-            options.addArguments("--disable-dev-shm-usage"); // prevent /dev/shm crash
-            options.addArguments("--window-size=1920,1080"); // fixed size (no real screen)
-            System.out.println("Running in HEADLESS mode (CI environment)");
+
+        ChromeOptions options = new ChromeOptions();
+        // ── Headless flags ───────────────────────────────────────────────────
+        options.addArguments("--headless=new");
+        options.addArguments("--no-sandbox");
+        options.addArguments("--disable-dev-shm-usage");
+        options.addArguments("--window-size=1920,1080");
+        options.addArguments("--disable-gpu");
+        options.addArguments("--disable-extensions");
+        options.addArguments("--disable-popup-blocking");
+        options.addArguments("--disable-blink-features=AutomationControlled");
+        options.addArguments("--remote-allow-origins=*");
+        // Make the site think it's a real browser
+        options.addArguments("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36");
+        options.setExperimentalOption("excludeSwitches", List.of("enable-automation"));
+        options.setExperimentalOption("useAutomationExtension", false);
+
+        if (!isHeadless) {
+            System.out.println("Running in HEADED mode (local)");
         } else {
-            System.out.println("Running in HEADED mode (local environment)");
+            System.out.println("Running in HEADLESS mode (CI)");
         }
 
-        driver  = new ChromeDriver(options);
-        actions = new Actions(driver);
-        wait    = new WebDriverWait(driver, Duration.ofSeconds(15));
-        js      = (JavascriptExecutor) driver;
+        driver    = new ChromeDriver(options);
+        actions   = new Actions(driver);
+        wait      = new WebDriverWait(driver, Duration.ofSeconds(30));  // ← was 15 s
+        shortWait = new WebDriverWait(driver, Duration.ofSeconds(6));
+        js        = (JavascriptExecutor) driver;
 
-        driver.manage().window().maximize();
+        driver.manage().window().setSize(new Dimension(1920, 1080));
         driver.navigate().to("https://nutridyn.com/");
-        pause(1500);
+
+        // Wait for the page body to be present before doing anything
+        wait.until(ExpectedConditions.presenceOfElementLocated(By.tagName("body")));
+        pause(3000);   // extra settle time — CI networks are slower than local
         screenshot("Homepage");
 
-        // ── Accept cookie ────────────────────────────────────────────────────
-        clickIfPresent(By.xpath("//span[contains(text(),'Accept')]"), "Cookie_Accepted");
+        // ── Dismiss cookie banner (try multiple selectors) ───────────────────
+        dismissCookieBanner();
 
         // ── Patient login ────────────────────────────────────────────────────
         clickIfPresent(By.xpath("//*[@id='header-account-1']/ul/li/a"), "Login_Page");
         typeInto(By.id("email"), "gopal.exinentpatient@gmail.com");
         typeInto(By.id("pass"),  "test@1234");
         clickIfPresent(By.name("send"), "Patient_Login_Success");
+        waitForPageLoad();
 
         // ── Hover over "Categories" nav item ────────────────────────────────
         WebElement categoryMenu = waitForElement(By.xpath("//*[@id='nav']/div[1]/ul/li[2]/a"));
+        jsScrollIntoView(categoryMenu);
+        pause(800);
         actions.moveToElement(categoryMenu).perform();
-        pause(1500);
+        pause(2000);   // give the dropdown time to render
         System.out.println("Category hover performed");
 
         // ── Click Blood Sugar Balance sub-category ───────────────────────────
         WebElement bloodSugar = waitForElement(
                 By.xpath("//*[@id='nav']/div[1]/ul/li[2]/div/div[2]/div/ul/li[2]/a"));
         actions.moveToElement(bloodSugar).click().perform();
-        pause(1000);
+        waitForPageLoad();
         screenshot("Blood_Sugar_Category");
         scrollBy(0, 300);
         pause(1000);
@@ -109,14 +116,14 @@ public class Nutridyn {
         clickIfPresent(
                 By.xpath("//*[@id='maincontent']/div[3]/div[1]/div[4]/ol/li[1]/div/div[2]/strong/a"),
                 "Product_Page_Alpha_Lipoic");
+        waitForPageLoad();
 
         // ── Add to cart ──────────────────────────────────────────────────────
         clickIfPresent(By.id("product-addtocart-button"), "Product_Added_To_Cart");
+        pause(2000);
 
         // ── Open mini-cart ───────────────────────────────────────────────────
-        clickIfPresent(
-                By.xpath("//*[@id='minicart']/div[1]/span/span[1]"),
-                "Cart_Page");
+        clickIfPresent(By.xpath("//*[@id='minicart']/div[1]/span/span[1]"), "Cart_Page");
         scrollBy(0, 300);
         pause(1000);
 
@@ -124,26 +131,29 @@ public class Nutridyn {
         clickIfPresent(
                 By.xpath("//*[@id='maincontent']/div[3]/div/div[6]/div[1]/div[2]/ul/li/button/span"),
                 "Checkout_Page");
+        waitForPageLoad();
 
         // ── Back to home ─────────────────────────────────────────────────────
         clickIfPresent(By.xpath("//*[@id='header_logo']/a/img"), "Home_After_Checkout");
+        waitForPageLoad();
 
-        // ── Account → Home (using Actions) ───────────────────────────────────
+        // ── Account → Home ───────────────────────────────────────────────────
         WebElement accountLink = waitForElement(By.xpath("//*[@id='header-account-1']/ul/li/a"));
         actions.moveToElement(accountLink).click().perform();
         System.out.println("Account page opened");
-        pause(1500);
+        waitForPageLoad();
 
         WebElement homeLogo = waitForElement(By.xpath("//*[@id='header_logo']/a"));
         actions.moveToElement(homeLogo).click().perform();
         System.out.println("Home page opened");
-        pause(1500);
+        waitForPageLoad();
 
         // ── Practitioner login ───────────────────────────────────────────────
         clickIfPresent(By.xpath("//*[@id='header-account-1']/ul/li/a"), null);
         typeInto(By.id("email"), "foo.bar@getastra.live");
         typeInto(By.id("pass"),  "123456");
         clickIfPresent(By.name("send"), "Practitioner_Login_Success");
+        waitForPageLoad();
 
         // ── My Orders ────────────────────────────────────────────────────────
         WebElement myOrders = waitForElement(
@@ -157,26 +167,31 @@ public class Nutridyn {
         clickIfPresent(
                 By.xpath("//*[@id='my-orders-table']/tbody/tr[1]/td[6]/a[1]/span"),
                 "First_Order_View");
+        waitForPageLoad();
 
         // ── My Subscriptions ─────────────────────────────────────────────────
         clickIfPresent(
                 By.xpath("//*[@id='maincontent']/div[2]/div[2]/div/div/div/ul[1]/li[3]/a/span"),
                 "My_Subscriptions");
+        waitForPageLoad();
 
         // ── Subscription view ────────────────────────────────────────────────
         clickIfPresent(
                 By.xpath("//*[@id='my-orders-table']/tbody/tr[1]/td[6]/a/span"),
                 "Subscription_View");
+        waitForPageLoad();
 
         // ── List page ────────────────────────────────────────────────────────
         clickIfPresent(
                 By.xpath("//*[@id='maincontent']/div[2]/div[2]/div/div/div/ul[1]/li[4]/a/span"),
                 "List_Page");
+        waitForPageLoad();
 
         // ── My Patients ──────────────────────────────────────────────────────
         clickIfPresent(
                 By.xpath("//*[@id='maincontent']/div[2]/div[2]/div/div/div/ul[1]/li[5]/a/span"),
                 "My_Patients");
+        waitForPageLoad();
 
         // ── Address Book ─────────────────────────────────────────────────────
         clickIfPresent(
@@ -197,9 +212,11 @@ public class Nutridyn {
 
         // ── 3X4 Genetics ─────────────────────────────────────────────────────
         clickIfPresent(By.xpath("//span[contains(text(),'3X4 Genetics')]"), "3X4_Genetics");
+        waitForPageLoad();
 
         // ── NutriDyn Connect ─────────────────────────────────────────────────
         clickIfPresent(By.xpath("//span[text()='NutriDyn Connect']"), "NutriDyn_Connect");
+        waitForPageLoad();
 
         // ── NutriDyn Connect Pro ─────────────────────────────────────────────
         clickIfPresent(By.xpath("//a[normalize-space()='NutriDyn Connect Pro']"), "NutriDyn_Connect_Pro");
@@ -226,7 +243,7 @@ public class Nutridyn {
         actions.moveToElement(logoFinal).click().perform();
         System.out.println("Home page opened again");
         screenshot("Home_Again");
-        pause(1000);
+        waitForPageLoad();
 
         // ── Logout ───────────────────────────────────────────────────────────
         clickIfPresent(By.xpath("//a[normalize-space()='Logout']"), "Logout");
@@ -237,41 +254,86 @@ public class Nutridyn {
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    //  Helper methods
+    //  New helper: wait for page to finish loading via JS readyState
+    // ════════════════════════════════════════════════════════════════════════
+    private static void waitForPageLoad() {
+        try {
+            wait.until(d -> js.executeScript("return document.readyState").equals("complete"));
+        } catch (Exception ignored) {}
+        pause(1500);   // brief extra settle after JS fires
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  New helper: dismiss cookie/consent banner via multiple selectors
+    // ════════════════════════════════════════════════════════════════════════
+    private static void dismissCookieBanner() {
+        List<By> cookieSelectors = List.of(
+            By.xpath("//span[contains(text(),'Accept')]"),
+            By.xpath("//button[contains(text(),'Accept')]"),
+            By.xpath("//button[contains(text(),'accept')]"),
+            By.xpath("//a[contains(text(),'Accept')]"),
+            By.id("btn-cookie-allow"),
+            By.cssSelector(".cookie-accept"),
+            By.cssSelector("[data-role='accept-cookie']")
+        );
+        for (By selector : cookieSelectors) {
+            try {
+                List<WebElement> els = driver.findElements(selector);
+                if (!els.isEmpty() && els.get(0).isDisplayed()) {
+                    shortWait.until(ExpectedConditions.elementToBeClickable(selector));
+                    js.executeScript("arguments[0].click();", els.get(0));
+                    System.out.println("Cookie banner dismissed via: " + selector);
+                    pause(1000);
+                    screenshot("Cookie_Accepted");
+                    return;
+                }
+            } catch (Exception ignored) {}
+        }
+        System.out.println("No cookie banner found — continuing");
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    //  Existing helpers (updated timeouts / JS-click fallback)
     // ════════════════════════════════════════════════════════════════════════
 
-    /** Wait for an element to be visible, then return it. */
     private static WebElement waitForElement(By locator) {
         return wait.until(ExpectedConditions.visibilityOfElementLocated(locator));
     }
 
-    /**
-     * Click an element via Actions if it exists on the page.
-     * If {@code screenshotTitle} is non-null a screenshot is taken after the click.
-     */
+    private static void jsScrollIntoView(WebElement el) {
+        js.executeScript("arguments[0].scrollIntoView({block:'center'});", el);
+    }
+
     private static void clickIfPresent(By locator, String screenshotTitle) throws IOException {
         List<WebElement> elements = driver.findElements(locator);
         if (!elements.isEmpty()) {
-            WebElement el = wait.until(ExpectedConditions.elementToBeClickable(locator));
-            // Scroll element into view before interacting
-            js.executeScript("arguments[0].scrollIntoView({block:'center'});", el);
-            actions.moveToElement(el).click().perform();
-            System.out.println("Clicked: " + locator);
-            pause(1500);
-            if (screenshotTitle != null) screenshot(screenshotTitle);
+            try {
+                WebElement el = wait.until(ExpectedConditions.elementToBeClickable(locator));
+                jsScrollIntoView(el);
+                pause(500);
+                try {
+                    actions.moveToElement(el).click().perform();
+                } catch (Exception e) {
+                    // Fallback: JS click if Actions fails (common in headless)
+                    js.executeScript("arguments[0].click();", el);
+                    System.out.println("Used JS fallback click for: " + locator);
+                }
+                System.out.println("Clicked: " + locator);
+                pause(1500);
+                if (screenshotTitle != null) screenshot(screenshotTitle);
+            } catch (Exception e) {
+                System.out.println("Click failed for: " + locator + " — " + e.getMessage());
+                if (screenshotTitle != null) screenshot(screenshotTitle, false, e.getMessage());
+            }
         } else {
             System.out.println("Element not found, skipping: " + locator);
         }
     }
 
-    /**
-     * Clear a text field and type into it via Actions (triple-click to select all → type).
-     */
     private static void typeInto(By locator, String text) {
         List<WebElement> elements = driver.findElements(locator);
         if (!elements.isEmpty()) {
             WebElement field = wait.until(ExpectedConditions.elementToBeClickable(locator));
-            // Triple-click selects existing text, then type replaces it
             actions.click(field)
                    .keyDown(Keys.CONTROL).sendKeys("a").keyUp(Keys.CONTROL)
                    .sendKeys(text)
@@ -283,19 +345,17 @@ public class Nutridyn {
         }
     }
 
-    /** Scroll the page by (x, y) pixels via Actions wheel scroll (Selenium 4). */
     private static void scrollBy(int x, int y) {
         actions.scrollByAmount(x, y).perform();
         pause(500);
     }
 
-    /** Simple sleep wrapper (milliseconds). */
     private static void pause(long ms) {
         try { Thread.sleep(ms); } catch (InterruptedException ignored) {}
     }
 
     // ════════════════════════════════════════════════════════════════════════
-    //  Screenshot / reporting helpers (unchanged logic, cleaned up)
+    //  Screenshot / reporting helpers
     // ════════════════════════════════════════════════════════════════════════
 
     private static void screenshot(String title) throws IOException {
@@ -306,9 +366,9 @@ public class Nutridyn {
         totalSteps++;
         if (isPass) passedSteps++; else failedSteps++;
 
-        String timestamp  = new SimpleDateFormat("yyyy-MM-dd_HH-mm-ss").format(new Date());
-        String prefix     = isPass ? "SUCCESS_" : "ERROR_";
-        String fileName   = prefix + title + "_" + timestamp + ".png";
+        String timestamp = new SimpleDateFormat("yyyy-MM-dd_HH-mm-ss").format(new Date());
+        String prefix    = isPass ? "SUCCESS_" : "ERROR_";
+        String fileName  = prefix + title + "_" + timestamp + ".png";
 
         File folder = new File(SS_DIR);
         if (!folder.exists()) folder.mkdirs();
@@ -363,7 +423,7 @@ public class Nutridyn {
         File htmlFolder = new File(HTML_DIR);
         if (!htmlFolder.exists()) htmlFolder.mkdirs();
 
-        String htmlFile        = HTML_DIR + "\\TestReport.html";
+        String htmlFile        = HTML_DIR + "/TestReport.html";   // forward slash — Linux CI
         String relativeImgPath = "../../../screenshots/" + RUN_DATE + "/" + RUN_TIME + "/" + localFileName;
         String statusClass     = isPass ? "pass" : "fail";
         String icon            = isPass ? "✅" : "❌";
@@ -393,9 +453,9 @@ public class Nutridyn {
 
         try (PrintWriter out = new PrintWriter(new BufferedWriter(new FileWriter(htmlFile, false)))) {
 
-            double passRate    = totalSteps > 0 ? ((double) passedSteps / totalSteps) * 100 : 0;
-            String overall     = failedSteps > 0 ? "FAILED" : "PASSED";
-            String badgeClass  = failedSteps > 0 ? "status-fail" : "status-pass";
+            double passRate   = totalSteps > 0 ? ((double) passedSteps / totalSteps) * 100 : 0;
+            String overall    = failedSteps > 0 ? "FAILED" : "PASSED";
+            String badgeClass = failedSteps > 0 ? "status-fail" : "status-pass";
             String currentTime = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date());
 
             out.println("<!DOCTYPE html><html lang=\"en\"><head>");
