@@ -1,14 +1,13 @@
 name: Nutridyn Automation Tests
 
 on:
-  # ── Triggers ────────────────────────────────────────────────────────────
   push:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
   schedule:
-    - cron: '0 6 * * *'           # Runs daily at 6:00 AM UTC
-  workflow_dispatch:               # Manual trigger from GitHub UI
+    - cron: '0 6 * * *'
+  workflow_dispatch:
     inputs:
       headless:
         description: 'Run in headless mode?'
@@ -58,12 +57,10 @@ jobs:
           CHROME_MAJOR=$(echo $CHROME_VERSION | cut -d. -f1)
           echo "Chrome version: $CHROME_VERSION (Major: $CHROME_MAJOR)"
 
-          # Chrome 115+ uses the new Chrome for Testing endpoint
           if [ "$CHROME_MAJOR" -ge 115 ]; then
             DRIVER_URL="https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chromedriver-linux64.zip"
             wget -q "$DRIVER_URL" -O /tmp/chromedriver.zip || \
-              wget -q "https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE_STABLE" -O /tmp/latest_version && \
-              LATEST=$(cat /tmp/latest_version) && \
+              LATEST=$(curl -s "https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE_STABLE") && \
               wget -q "https://storage.googleapis.com/chrome-for-testing-public/${LATEST}/linux64/chromedriver-linux64.zip" -O /tmp/chromedriver.zip
             unzip -q /tmp/chromedriver.zip -d /tmp/
             sudo mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/chromedriver
@@ -87,17 +84,28 @@ jobs:
             ${{ runner.os }}-maven-
 
       # ── 6. Build the project ─────────────────────────────────────────────
+      # --enable-preview is a Java flag — pass it via -D properties,
+      # NOT as a direct mvn CLI argument (which caused "Unrecognized option" error).
       - name: Build with Maven
-        run: mvn clean compile --enable-preview -q
+        run: |
+          mvn clean compile -q \
+            -Dmaven.compiler.enablePreview=true \
+            -Dmaven.compiler.source=24 \
+            -Dmaven.compiler.target=24
 
       # ── 7. Run Nutridyn automation ────────────────────────────────────────
+      # --enable-preview for JVM runtime is set via MAVEN_OPTS env var
       - name: Run Nutridyn Automation
+        env:
+          MAVEN_OPTS: "--enable-preview"
         run: |
           mvn exec:java \
             -Dexec.mainClass="Nutridyn" \
-            --enable-preview \
-            -Dexec.cleanupDaemonThreads=false
-        continue-on-error: true          # Always collect artifacts even on failure
+            -Dexec.cleanupDaemonThreads=false \
+            -Dmaven.compiler.enablePreview=true \
+            -Dmaven.compiler.source=24 \
+            -Dmaven.compiler.target=24
+        continue-on-error: true
 
       # ── 8. Upload HTML report ─────────────────────────────────────────────
       - name: Upload HTML Report
@@ -108,7 +116,7 @@ jobs:
           path: ~/NutridynAutomation/html/
           retention-days: 30
 
-      # ── 9. Upload screenshots ─────────────────────────────────────────────
+      # ── 9. Upload Screenshots ─────────────────────────────────────────────
       - name: Upload Screenshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -126,7 +134,7 @@ jobs:
           path: ~/NutridynAutomation/reports/Nutridyn.csv
           retention-days: 30
 
-      # ── 11. Print test summary to console ────────────────────────────────
+      # ── 11. Print test summary ────────────────────────────────────────────
       - name: Print Test Summary
         if: always()
         run: |
@@ -139,7 +147,7 @@ jobs:
           echo "Headless   : ${{ env.HEADLESS }}"
           echo "======================================"
           if [ -f ~/NutridynAutomation/reports/Nutridyn.csv ]; then
-            echo "CSV Report preview:"
+            echo "CSV Report:"
             cat ~/NutridynAutomation/reports/Nutridyn.csv
           else
             echo "CSV report not found."
