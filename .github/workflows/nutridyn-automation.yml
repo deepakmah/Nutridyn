@@ -6,7 +6,7 @@ on:
   pull_request:
     branches: [ main, master ]
   schedule:
-    - cron: '0 6 * * *'
+    - cron: '0 6 * * *'           # Every day at 6:00 AM UTC
   workflow_dispatch:
     inputs:
       headless:
@@ -41,9 +41,6 @@ jobs:
           cache: maven
 
       # ── 3. Install Chrome + matching ChromeDriver in one step ─────────────
-      # Uses the official browser-actions/setup-chrome action.
-      # It automatically installs Chrome and the exact matching ChromeDriver
-      # together — no manual version parsing needed, no more exit code 8.
       - name: Setup Chrome + ChromeDriver
         uses: browser-actions/setup-chrome@v1
         with:
@@ -85,7 +82,53 @@ jobs:
             -Dmaven.compiler.target=24
         continue-on-error: true
 
-      # ── 7. Upload HTML report ─────────────────────────────────────────────
+      # ── 7. Check if CSV was generated ────────────────────────────────────
+      - name: Check CSV exists
+        id: check_csv
+        run: |
+          if [ -f ~/NutridynAutomation/reports/Nutridyn.csv ]; then
+            echo "csv_exists=true" >> $GITHUB_OUTPUT
+            echo "CSV found:"
+            cat ~/NutridynAutomation/reports/Nutridyn.csv
+          else
+            echo "csv_exists=false" >> $GITHUB_OUTPUT
+            echo "CSV not found — creating a placeholder"
+            mkdir -p ~/NutridynAutomation/reports
+            echo "Timestamp,Title,LocalFile,UploadedURL" > ~/NutridynAutomation/reports/Nutridyn.csv
+            echo "$(date),,No steps recorded,N/A" >> ~/NutridynAutomation/reports/Nutridyn.csv
+          fi
+
+      # ── 8. Send email with CSV attachment ────────────────────────────────
+      - name: Send Test Results Email
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.MAIL_SENDER }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "Nutridyn Automation Test Results – ${{ github.run_number }} | ${{ github.run_id }}"
+          to: deepak.maheshwari@exinent.com,sangeetha.arora@exinent.com
+          from: Nutridyn Automation <${{ secrets.MAIL_SENDER }}>
+          body: |
+            Hi Deepak and Sangeetha,
+
+            Please find the attached CSV file with the Nutridyn automation test results for today's run.
+
+            Run Details:
+            - Run Number : ${{ github.run_number }}
+            - Triggered  : ${{ github.event_name }}
+            - Branch     : ${{ github.ref_name }}
+            - Date       : ${{ github.run_id }}
+
+            You can also view the full report and screenshots in the GitHub Actions artifacts:
+            https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            Thanks,
+            Nutridyn Automation Bot
+          attachments: ~/NutridynAutomation/reports/Nutridyn.csv
+
+      # ── 9. Upload HTML report ─────────────────────────────────────────────
       - name: Upload HTML Report
         if: always()
         uses: actions/upload-artifact@v4
@@ -94,7 +137,7 @@ jobs:
           path: ~/NutridynAutomation/html/
           retention-days: 30
 
-      # ── 8. Upload Screenshots ─────────────────────────────────────────────
+      # ── 10. Upload Screenshots ────────────────────────────────────────────
       - name: Upload Screenshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -103,7 +146,7 @@ jobs:
           path: ~/NutridynAutomation/screenshots/
           retention-days: 30
 
-      # ── 9. Upload CSV report ──────────────────────────────────────────────
+      # ── 11. Upload CSV report ─────────────────────────────────────────────
       - name: Upload CSV Report
         if: always()
         uses: actions/upload-artifact@v4
@@ -112,7 +155,7 @@ jobs:
           path: ~/NutridynAutomation/reports/Nutridyn.csv
           retention-days: 30
 
-      # ── 10. Print test summary ────────────────────────────────────────────
+      # ── 12. Print test summary ────────────────────────────────────────────
       - name: Print Test Summary
         if: always()
         run: |
