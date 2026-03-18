@@ -40,41 +40,22 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      # ── 3. Install Google Chrome ─────────────────────────────────────────
-      - name: Install Google Chrome
+      # ── 3. Install Chrome + matching ChromeDriver in one step ─────────────
+      # Uses the official browser-actions/setup-chrome action.
+      # It automatically installs Chrome and the exact matching ChromeDriver
+      # together — no manual version parsing needed, no more exit code 8.
+      - name: Setup Chrome + ChromeDriver
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
+        id: setup-chrome
+
+      - name: Verify Chrome & ChromeDriver versions
         run: |
-          wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
-          echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | \
-            sudo tee /etc/apt/sources.list.d/google-chrome.list
-          sudo apt-get update -q
-          sudo apt-get install -y google-chrome-stable
-          google-chrome --version
-
-      # ── 4. Install ChromeDriver (matching Chrome version) ─────────────────
-      - name: Install ChromeDriver
-        run: |
-          CHROME_VERSION=$(google-chrome --version | grep -oP '\d+\.\d+\.\d+\.\d+')
-          CHROME_MAJOR=$(echo $CHROME_VERSION | cut -d. -f1)
-          echo "Chrome version: $CHROME_VERSION (Major: $CHROME_MAJOR)"
-
-          if [ "$CHROME_MAJOR" -ge 115 ]; then
-            DRIVER_URL="https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chromedriver-linux64.zip"
-            wget -q "$DRIVER_URL" -O /tmp/chromedriver.zip || \
-              LATEST=$(curl -s "https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE_STABLE") && \
-              wget -q "https://storage.googleapis.com/chrome-for-testing-public/${LATEST}/linux64/chromedriver-linux64.zip" -O /tmp/chromedriver.zip
-            unzip -q /tmp/chromedriver.zip -d /tmp/
-            sudo mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/chromedriver
-          else
-            DRIVER_VERSION=$(curl -s "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_${CHROME_MAJOR}")
-            wget -q "https://chromedriver.storage.googleapis.com/${DRIVER_VERSION}/chromedriver_linux64.zip" -O /tmp/chromedriver.zip
-            unzip -q /tmp/chromedriver.zip -d /tmp/
-            sudo mv /tmp/chromedriver /usr/local/bin/chromedriver
-          fi
-
-          sudo chmod +x /usr/local/bin/chromedriver
+          google-chrome --version || ${{ steps.setup-chrome.outputs.chrome-path }} --version
           chromedriver --version
 
-      # ── 5. Cache Maven dependencies ──────────────────────────────────────
+      # ── 4. Cache Maven dependencies ──────────────────────────────────────
       - name: Cache Maven Packages
         uses: actions/cache@v4
         with:
@@ -83,9 +64,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-maven-
 
-      # ── 6. Build the project ─────────────────────────────────────────────
-      # --enable-preview is a Java flag — pass it via -D properties,
-      # NOT as a direct mvn CLI argument (which caused "Unrecognized option" error).
+      # ── 5. Build the project ──────────────────────────────────────────────
       - name: Build with Maven
         run: |
           mvn clean compile -q \
@@ -93,8 +72,7 @@ jobs:
             -Dmaven.compiler.source=24 \
             -Dmaven.compiler.target=24
 
-      # ── 7. Run Nutridyn automation ────────────────────────────────────────
-      # --enable-preview for JVM runtime is set via MAVEN_OPTS env var
+      # ── 6. Run Nutridyn automation ────────────────────────────────────────
       - name: Run Nutridyn Automation
         env:
           MAVEN_OPTS: "--enable-preview"
@@ -107,7 +85,7 @@ jobs:
             -Dmaven.compiler.target=24
         continue-on-error: true
 
-      # ── 8. Upload HTML report ─────────────────────────────────────────────
+      # ── 7. Upload HTML report ─────────────────────────────────────────────
       - name: Upload HTML Report
         if: always()
         uses: actions/upload-artifact@v4
@@ -116,7 +94,7 @@ jobs:
           path: ~/NutridynAutomation/html/
           retention-days: 30
 
-      # ── 9. Upload Screenshots ─────────────────────────────────────────────
+      # ── 8. Upload Screenshots ─────────────────────────────────────────────
       - name: Upload Screenshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -125,7 +103,7 @@ jobs:
           path: ~/NutridynAutomation/screenshots/
           retention-days: 30
 
-      # ── 10. Upload CSV report ─────────────────────────────────────────────
+      # ── 9. Upload CSV report ──────────────────────────────────────────────
       - name: Upload CSV Report
         if: always()
         uses: actions/upload-artifact@v4
@@ -134,7 +112,7 @@ jobs:
           path: ~/NutridynAutomation/reports/Nutridyn.csv
           retention-days: 30
 
-      # ── 11. Print test summary ────────────────────────────────────────────
+      # ── 10. Print test summary ────────────────────────────────────────────
       - name: Print Test Summary
         if: always()
         run: |
