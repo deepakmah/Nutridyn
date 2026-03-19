@@ -23,7 +23,7 @@ public class Nutridyn {
     // ── Config ───────────────────────────────────────────────────────────────
     static final String IMGBB_API_KEY = System.getenv("IMGBB_API_KEY") != null
                                       ? System.getenv("IMGBB_API_KEY")
-                                      : "46866c7eef7ee62b26a79f32a5d57a08";
+                                      : "3b23b07a37fbcee41d4984d100162a10";
     static final String RUN_DATE   = new SimpleDateFormat("yyyy-MM-dd").format(new Date());
     static final String RUN_TIME   = new SimpleDateFormat("HH-mm-ss").format(new Date());
     static final String START_TIME = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date());
